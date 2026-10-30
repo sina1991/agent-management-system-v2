@@ -13,6 +13,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status", help="Report the software implementation stage")
+    installer = commands.add_parser("install", help="Install current V2 package into a Git Target")
+    installer.add_argument("target", type=Path)
+    check = commands.add_parser("doctor", help="Verify an installed V2 Target")
+    check.add_argument("target", type=Path)
     schema = commands.add_parser("schema", help="Print a contract JSON Schema")
     schema.add_argument("contract", choices=sorted(CONTRACTS))
     validate = commands.add_parser("validate", help="Validate a contract JSON file")
@@ -27,10 +31,20 @@ def main(argv: list[str] | None = None) -> int:
     task.add_argument("value", help="JSON file for create; UUID for show/history")
     args = parser.parse_args(argv)
     if args.command == "status":
-        print(json.dumps({"version": __version__, "stage": "storage_foundation",
+        print(json.dumps({"version": __version__, "stage": "installer_foundation",
                           "operational": False,
-                          "message": "Contracts and task persistence available; installer and runtime pending."}))
+                          "message": "Contracts, task persistence, local installer and doctor available; execution runtime pending."}))
         return 0
+    if args.command in {"install", "doctor"}:
+        from agent_system.infrastructure.installer import InstallError, doctor, install
+        try:
+            result = install(args.target) if args.command == "install" else doctor(args.target)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0
+        except (InstallError, OSError, ValueError) as error:
+            print(json.dumps({"code": getattr(error, "code", "INSTALL_FAILED"),
+                              "message": str(error)}, ensure_ascii=False), file=sys.stderr)
+            return 2
     if args.command in {"db", "task"}:
         from uuid import UUID
         from agent_system.contracts.models import Task

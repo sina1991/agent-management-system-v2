@@ -1,0 +1,2 @@
+[console_scripts]
+ams = agent_system.interfaces.cli:main

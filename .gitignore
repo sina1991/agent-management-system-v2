@@ -14,3 +14,10 @@ htmlcov/
 .agent-system/state/
 .agent-system/.venv/
 *.log
+
+# Target-local AMS operational data
+.agent-system/state/
+.agent-system/.manifest.json.tmp
+.agent-system/app/
+.agent-system/config/
+.agent-system/profiles/

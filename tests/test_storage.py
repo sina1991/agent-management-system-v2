@@ -123,3 +123,60 @@ class StorageTests(unittest.TestCase):
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(main(["db", "verify", str(missing)]), 2)
         self.assertFalse(missing.exists())
+
+class InstallerTests(unittest.TestCase):
+    def setUp(self):
+        import os
+        self.tmp = tempfile.TemporaryDirectory()
+        self.target = Path(self.tmp.name)/"target"
+        self.target.mkdir()
+        (self.target/".git").mkdir()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_install_then_doctor_and_existing_install_preserves_state(self):
+        import json
+        import contextlib
+        import io
+        from agent_system.infrastructure.installer import doctor, install
+        result = install(self.target)
+        self.assertEqual(result["status"], "verified")
+        self.assertGreater(result["file_count"], 10)
+        app = self.target/".agent-system"/"app"/"0.1.0.dev0"
+        self.assertTrue((app/"agent_system"/"infrastructure"/"database"/"migrations"/"versions"/"0001_initial.py").is_file())
+        self.assertEqual(doctor(self.target)["database"], "verified")
+        store = Store(self.target/".agent-system"/"state"/"system.db")
+        task = make_task()
+        store.create_task(task)
+        store.close()
+        second = install(self.target)
+        self.assertEqual(second["status"], "existing")
+        self.assertEqual(second["installation_id"], result["installation_id"])
+        store = Store(self.target/".agent-system"/"state"/"system.db")
+        self.assertEqual(store.get_task(task.task_id), task)
+        store.close()
+
+    def test_target_requirements_and_preexisting_content_are_protected(self):
+        from agent_system.infrastructure.installer import InstallError, install
+        with self.assertRaises(InstallError):
+            install(self.target/"missing")
+        other = Path(self.tmp.name)/"not-git"
+        other.mkdir()
+        with self.assertRaises(InstallError):
+            install(other)
+        reserved = self.target/".agent-system"
+        reserved.mkdir()
+        marker = reserved/"keep.txt"
+        marker.write_text("user data")
+        with self.assertRaises(InstallError):
+            install(self.target)
+        self.assertEqual(marker.read_text(), "user data")
+
+    def test_doctor_detects_release_tampering_and_missing_db(self):
+        from agent_system.infrastructure.installer import InstallError, doctor, install
+        install(self.target)
+        release = self.target/".agent-system"/"app"/"0.1.0.dev0"/"agent_system"/"__init__.py"
+        release.write_text(release.read_text()+"# changed\n")
+        with self.assertRaises(InstallError):
+            doctor(self.target)

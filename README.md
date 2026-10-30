@@ -4,7 +4,7 @@
 
 ## وضعیت فعلی
 
-Contracts، Task State Machine و Storage اولیه SQLite پیاده‌سازی شده‌اند. Task، Event و Configuration پس از Restart حفظ می‌شوند. Installer، Agent Registry عملیاتی و Runtime هنوز پیاده‌سازی نشده‌اند. این مخزن به V1 وابسته نیست.
+Contracts، Task State Machine و Storage اولیه SQLite پیاده‌سازی شده‌اند. Task، Event و Configuration پس از Restart حفظ می‌شوند. Installer محلی و doctor هم اکنون برای Targetهای Git پیاده‌سازی شده‌اند. Agent Registry عملیاتی و Runtime هنوز پیاده‌سازی نشده‌اند. این مخزن به V1 وابسته نیست.
 
 ## اجرای نسخه توسعه
 
@@ -30,6 +30,15 @@ ams db init /tmp/ams-demo/system.db
 ams task create /tmp/ams-demo/system.db examples/task.json
 ams db verify /tmp/ams-demo/system.db
 ```
+
+برای نصب نسخه فعلی روی یک Checkout آزمایشی Git:
+
+```bash
+ams install /path/to/target-repository
+ams doctor /path/to/target-repository
+```
+
+Installer کد نسخه فعلی Package را در `.agent-system/app/` کپی می‌کند، SQLite را آماده می‌کند و Manifest دارای Checksum می‌نویسد. این نصب Target از Source Repository یا URL دریافت نمی‌کند و محیط مجازی یا Dependencyهای Target را نصب نمی‌کند؛ Python باید Pydantic، SQLAlchemy و Alembic را از قبل داشته باشد. مسیر Target نباید پوشه رزروشده `.agent-system/` با محتوای قبلی داشته باشد.
 
 `task create` شناسه Task را برمی‌گرداند. سپس با `ams task show DATABASE UUID` و `ams task history DATABASE UUID` اطلاعات آن را بخوانید. این دستورات Task را اجرا نمی‌کنند.
 
