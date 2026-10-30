@@ -14,7 +14,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(code, 0)
         status = json.loads(output.getvalue())
         self.assertFalse(status["operational"])
-        self.assertEqual(status["stage"], "installer_foundation")
+        self.assertEqual(status["stage"], "vertical_task_path")
 
     def test_unimplemented_install_is_rejected(self):
         with contextlib.redirect_stderr(io.StringIO()):
