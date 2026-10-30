@@ -37,8 +37,11 @@ def _local_source() -> tuple[Path, Path, str]:
     project = package.parents[1]
     if not (package / "__init__.py").is_file():
         raise InstallError("cannot resolve packaged application source")
-    with (project / "pyproject.toml").open("rb") as stream:
-        version = tomllib.load(stream)["project"]["version"]
+    pyproject=project / "pyproject.toml"
+    if pyproject.is_file():
+        with pyproject.open("rb") as stream: version=tomllib.load(stream)["project"]["version"]
+    else:
+        version=importlib.metadata.version("agent-management-system-v2")
     return project, package, version
 
 def _remote_source(url: str, destination: Path) -> tuple[Path, Path, str, str]:
