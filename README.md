@@ -2,11 +2,13 @@
 
 سیستم مستقل مدیریت Agent و Task که داخل هر Target Repository نصب خواهد شد.
 
+**نسخه: 0.6.0 — Public Preview**
+
 ## وضعیت فعلی
 
-Contracts، Task State Machine و Storage اولیه SQLite پیاده‌سازی شده‌اند. Task، Event و Configuration پس از Restart حفظ می‌شوند. Installer محلی، doctor، Agent Registry و دو Worker قطعی allowlist شده در دسترس‌اند. مسیر synchronous اجرای Task تا Verify پیاده‌سازی شده است. این مخزن به V1 وابسته نیست.
+Contracts، Task State Machine و Storage مبتنی بر SQLite پیاده‌سازی شده‌اند. Task، Execution، Result و Event پس از Restart حفظ می‌شوند. Installer، doctor، Agent Registry و Workerهای داخلی در دسترس‌اند. مسیر synchronous اجرای Task تا Verify، retry محدود و Recovery پایه پیاده‌سازی شده است. این مخزن به V1 وابسته نیست.
 
-## اجرای نسخه توسعه
+## نصب و اجرای نسخه 0.6.0
 
 Python 3.12 مبنای فعلی است.
 
@@ -19,7 +21,7 @@ ams status
 python -m unittest discover -s tests -v
 ```
 
-`ams status` وضعیت توسعه نرم‌افزار را گزارش می‌کند؛ نصب در Target انجام نمی‌دهد.
+`ams status` وضعیت توسعهٔ نرم‌افزار را گزارش می‌کند؛ نصب در Target انجام نمی‌دهد.
 
 ## دستورات فعلی
 
@@ -32,16 +34,16 @@ ams task create /tmp/ams-demo/system.db examples/task.json
 ams db verify /tmp/ams-demo/system.db
 ```
 
-برای نصب نسخه فعلی روی یک Checkout آزمایشی Git:
+برای نصب روی یک Checkout آزمایشی Git:
 
 ```bash
 ams install /path/to/target-repository --source-url https://github.com/OWNER/agent-management-system-v2.git
 ams doctor /path/to/target-repository
 ```
 
-Installer کد نسخه فعلی Package را در `.agent-system/app/` کپی می‌کند، SQLite را آماده می‌کند و Manifest دارای Checksum می‌نویسد. این نصب Target از Source Repository یا URL دریافت نمی‌کند و محیط مجازی یا Dependencyهای Target را نصب نمی‌کند؛ Python باید Pydantic، SQLAlchemy و Alembic را از قبل داشته باشد. مسیر Target نباید پوشه رزروشده `.agent-system/` با محتوای قبلی داشته باشد.
+Installer از HTTPS source بدون اطلاعات ورود در URL پشتیبانی می‌کند، وابستگی‌های قفل‌شده را در محیط Target نصب می‌کند و Manifest دارای Checksum می‌نویسد. مسیر Target نباید پوشهٔ رزروشدهٔ `.agent-system/` با محتوای قبلی داشته باشد.
 
-`task create` شناسه Task را برمی‌گرداند؛ سپس `ams task run DATABASE UUID` مسیر اجرا و Verify را طی می‌کند؛ برای خطای Timeout می‌توان با `ams task retry DATABASE UUID` یک Attempt جدید درخواست کرد. مثال فعلی برای تکمیل موفق Task باید `verification_spec` را روی `json_equals` با خروجی مورد انتظار قرار دهد. `manual_review` به‌طور خودکار COMPLETED نمی‌شود. سپس با `ams task show DATABASE UUID` و `ams task history DATABASE UUID` اطلاعات آن را بخوانید. این دستورات Task را اجرا نمی‌کنند.
+`task create` شناسه Task را برمی‌گرداند؛ سپس `ams task run DATABASE UUID` مسیر اجرا و Verify را طی می‌کند؛ برای خطای Timeout می‌توان با `ams task retry DATABASE UUID` یک Attempt جدید درخواست کرد. مثال فعلی برای تکمیل موفق Task باید `verification_spec` را روی `json_equals` با خروجی مورد انتظار قرار دهد. `manual_review` به‌طور خودکار COMPLETED نمی‌شود. سپس با `ams task show DATABASE UUID` و `ams task history DATABASE UUID` اطلاعات آن را بخوانید.
 
 `db init` فقط Database خالی را مقداردهی اولیه می‌کند؛ Schema ناشناخته را تغییر نمی‌دهد. Database آزمایشی را خارج از Git نگه دارید. محدودیت‌های فعلی و مرزهای API در [Contracts و Storage](docs/contracts-and-storage.md) آمده‌اند.
 
@@ -63,6 +65,7 @@ ams db verify /path/to/system.db
 - [Roadmap](docs/roadmap.md)
 - [Backup و Restore](docs/backup-restore.md)
 - [Approval، Handoff و Context](docs/collaboration-context.md)
+- [تاریخچه نسخه‌ها](CHANGELOG.md)
 - [ADRs](docs/adr/README.md)
 - [مشارکت](CONTRIBUTING.md)
 
