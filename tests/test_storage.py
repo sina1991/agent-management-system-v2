@@ -203,13 +203,13 @@ class ExecutionRecoveryTests(unittest.TestCase):
         task = self.store.transition(task.task_id, S.PLANNED, F(plan_recorded=True), expected_revision=0)
         task = self.store.transition(task.task_id, S.READY, F(plan_recorded=True, policy_allowed=True), expected_revision=1)
         task = self.store.assign_agent(task.task_id, agent_id, expected_revision=2)
+        task = self.store.transition(task.task_id, S.ASSIGNED,
+            F(agent_selected=True, policy_allowed=True), expected_revision=task.revision)
         execution = Execution(task_id=task.task_id, agent_id=agent_id, timeout_seconds=3,
             idempotency_key=f"{task.task_id}:1", owner_token=uuid4(), status="running",
             started_at=utcnow()-timedelta(minutes=1), heartbeat_at=utcnow()-timedelta(minutes=1),
             lease_expires_at=utcnow()-timedelta(seconds=1))
         self.store.create_execution(execution)
-        self.store.transition(task.task_id, S.ASSIGNED,
-            F(agent_selected=True, policy_allowed=True), expected_revision=3)
         self.store.transition(task.task_id, S.RUNNING,
             F(agent_selected=True, execution_created=True, policy_allowed=True), expected_revision=4)
         return task.task_id, execution
