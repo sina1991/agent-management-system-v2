@@ -28,3 +28,19 @@ results = Table("results", metadata,
                 Column("execution_id", String(36), nullable=False, unique=True),
                 Column("status", String(24), nullable=False),
                 Column("payload", Text, nullable=False))
+
+approvals = Table("approvals", metadata,
+                  Column("approval_id", String(36), primary_key=True),
+                  Column("action_digest", String(64), nullable=False),
+                  Column("decision", String(16), nullable=False),
+                  Column("payload", Text, nullable=False))
+handoffs = Table("handoffs", metadata,
+                 Column("handoff_id", String(36), primary_key=True),
+                 Column("task_id", String(36), nullable=False, index=True),
+                 Column("execution_id", String(36), nullable=False),
+                 Column("payload_digest", String(64), nullable=False),
+                 Column("payload", Text, nullable=False))
+context = Table("project_context", metadata,
+                Column("key", String, primary_key=True),
+                Column("revision", Integer, nullable=False),
+                Column("payload", Text, nullable=False))

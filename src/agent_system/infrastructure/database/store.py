@@ -14,14 +14,14 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 
 from agent_system.application.tasks import transition_task
-from agent_system.contracts.models import Event, Execution, Result, Task
+from agent_system.contracts.models import Approval, Event, Execution, Handoff, Result, Task
 from agent_system.domain.dependencies import validate_graph
 from agent_system.domain.errors import DomainError, RevisionConflict
 from agent_system.domain.lifecycle import TransitionFacts
 from agent_system.domain.types import TaskStatus
-from agent_system.infrastructure.database.schema import configuration, events, executions, results, tasks
+from agent_system.infrastructure.database.schema import approvals, configuration, context, events, executions, handoffs, results, tasks
 
-SCHEMA_REVISION = "0002"
+SCHEMA_REVISION = "0003"
 
 
 class StorageError(DomainError):
@@ -68,7 +68,7 @@ class Store:
         required = {"tasks", "events", "configuration", "alembic_version"}
         if not required.issubset(inspect(connection).get_table_names()):
             raise StorageError("required tables missing")
-        for table in (tasks, events, configuration, executions, results):
+        for table in (tasks, events, configuration, executions, results, approvals, handoffs, context):
             columns = {column["name"] for column in inspect(connection).get_columns(table.name)}
             if not set(table.columns.keys()).issubset(columns):
                 raise StorageError(f"required columns missing: {table.name}")
@@ -80,9 +80,8 @@ class Store:
         if not self.path.is_file():
             raise StorageError("database missing")
         self.close()
-        backup = self.path.with_name(self.path.name + ".pre-upgrade.bak")
-        if backup.exists():
-            raise StorageError("pre-upgrade backup already exists; inspect it before retrying")
+        backup = self.path.with_name(self.path.name + ".pre-upgrade-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".bak")
+        if backup.exists(): raise StorageError("timestamped backup already exists")
         try:
             with sqlite3.connect(self.path) as source, sqlite3.connect(backup) as destination:
                 source.backup(destination)
@@ -290,6 +289,66 @@ class Store:
             payloads = connection.execute(select(events.c.payload).where(
                 events.c.correlation_id == str(task_id)).order_by(events.c.sequence)).scalars().all()
         return [Event.model_validate_json(payload) for payload in payloads]
+
+    def save_approval(self, approval: Approval) -> Approval:
+        with self.engine.begin() as connection:
+            connection.execute(approvals.insert().values(approval_id=str(approval.approval_id),
+                action_digest=approval.action_digest, decision=approval.decision, payload=approval.model_dump_json()))
+        return approval
+
+    def get_approval(self, approval_id: UUID) -> Approval:
+        with self.engine.connect() as connection:
+            payload=connection.execute(select(approvals.c.payload).where(approvals.c.approval_id==str(approval_id))).scalar_one_or_none()
+        if payload is None: raise KeyError(approval_id)
+        return Approval.model_validate_json(payload)
+
+    def decide_approval(self, approval_id: UUID, *, decision: str, actor: str, now: datetime) -> Approval:
+        if decision not in {"approved", "rejected"} or not actor.strip(): raise StorageError("invalid approval decision")
+        with self.engine.begin() as connection:
+            payload=connection.execute(select(approvals.c.payload).where(approvals.c.approval_id==str(approval_id))).scalar_one_or_none()
+            if payload is None: raise KeyError(approval_id)
+            approval=Approval.model_validate_json(payload)
+            if approval.decision != "pending" or now >= approval.expires_at: raise StorageError("approval is decided or expired")
+            updated=approval.model_copy(update={"decision":decision,"decided_by":actor,"decided_at":now})
+            # Revalidate the immutable replacement before writing.
+            updated=Approval.model_validate_json(updated.model_dump_json())
+            connection.execute(approvals.update().where(approvals.c.approval_id==str(approval_id), approvals.c.decision=="pending").values(decision=decision,payload=updated.model_dump_json()))
+        return updated
+
+    def save_handoff(self, handoff: Handoff) -> Handoff:
+        with self.engine.begin() as connection:
+            task=connection.execute(select(tasks.c.payload).where(tasks.c.task_id==str(handoff.task_id))).scalar_one_or_none()
+            execution=connection.execute(select(executions.c.task_id).where(executions.c.execution_id==str(handoff.execution_id))).scalar_one_or_none()
+            if task is None or execution != str(handoff.task_id): raise StorageError("Handoff references unrelated Task or Execution")
+            connection.execute(handoffs.insert().values(handoff_id=str(handoff.handoff_id),task_id=str(handoff.task_id),execution_id=str(handoff.execution_id),payload_digest=handoff.payload_digest,payload=handoff.model_dump_json()))
+        return handoff
+
+    def get_handoff(self, handoff_id: UUID) -> Handoff:
+        with self.engine.connect() as connection:
+            payload=connection.execute(select(handoffs.c.payload).where(handoffs.c.handoff_id==str(handoff_id))).scalar_one_or_none()
+        if payload is None: raise KeyError(handoff_id)
+        return Handoff.model_validate_json(payload)
+
+    def set_context(self, key: str, value, *, expected_revision: int | None = None) -> int:
+        if not key.strip(): raise ValueError("context key required")
+        payload=json.dumps(value,ensure_ascii=False,allow_nan=False)
+        with self.engine.begin() as connection:
+            row=connection.execute(select(context.c.revision).where(context.c.key==key)).scalar_one_or_none()
+            if row is None:
+                if expected_revision not in (None,0): raise RevisionConflict("context revision changed")
+                revision=1
+                connection.execute(context.insert().values(key=key,revision=revision,payload=payload))
+            else:
+                if expected_revision != row: raise RevisionConflict("context revision changed")
+                revision=row+1
+                connection.execute(context.update().where(context.c.key==key,context.c.revision==row).values(revision=revision,payload=payload))
+        return revision
+
+    def get_context(self, key: str) -> tuple[object,int]:
+        with self.engine.connect() as connection:
+            row=connection.execute(select(context.c.payload,context.c.revision).where(context.c.key==key)).first()
+        if row is None: raise KeyError(key)
+        return json.loads(row.payload),row.revision
 
     def set_config(self, key: str, value):
         if not key.strip():

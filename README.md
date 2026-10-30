@@ -45,11 +45,24 @@ Installer کد نسخه فعلی Package را در `.agent-system/app/` کپی �
 
 `db init` فقط Database خالی را مقداردهی اولیه می‌کند؛ Schema ناشناخته را تغییر نمی‌دهد. Database آزمایشی را خارج از Git نگه دارید. محدودیت‌های فعلی و مرزهای API در [Contracts و Storage](docs/contracts-and-storage.md) آمده‌اند.
 
+## Backup و Context
+
+```bash
+ams backup /path/to/system.db /path/to/snapshot.db
+ams restore /path/to/snapshot.db /path/to/new-system.db
+ams context set /path/to/system.db project.summary '{"name":"Demo"}'
+ams context get /path/to/system.db project.summary
+ams db upgrade /path/to/system.db
+ams db verify /path/to/system.db
+```
+
 ## مستندات
 
 - [Specification 1.1](docs/specification.md)
 - [Architecture](docs/architecture.md)
 - [Roadmap](docs/roadmap.md)
+- [Backup و Restore](docs/backup-restore.md)
+- [Approval، Handoff و Context](docs/collaboration-context.md)
 - [ADRs](docs/adr/README.md)
 - [مشارکت](CONTRIBUTING.md)
 

@@ -143,7 +143,7 @@ class InstallerTests(unittest.TestCase):
         result = install(self.target)
         self.assertEqual(result["status"], "verified")
         self.assertGreater(result["file_count"], 10)
-        app = self.target/".agent-system"/"app"/"0.4.0.dev0"
+        app = self.target/".agent-system"/"app"/"0.5.0.dev0"
         self.assertTrue((app/"agent_system"/"infrastructure"/"database"/"migrations"/"versions"/"0001_initial.py").is_file())
         self.assertEqual(doctor(self.target)["database"], "verified")
         store = Store(self.target/".agent-system"/"state"/"system.db")
@@ -176,7 +176,7 @@ class InstallerTests(unittest.TestCase):
     def test_doctor_detects_release_tampering_and_missing_db(self):
         from agent_system.infrastructure.installer import InstallError, doctor, install
         install(self.target)
-        release = self.target/".agent-system"/"app"/"0.4.0.dev0"/"agent_system"/"__init__.py"
+        release = self.target/".agent-system"/"app"/"0.5.0.dev0"/"agent_system"/"__init__.py"
         release.write_text(release.read_text()+"# changed\n")
         with self.assertRaises(InstallError):
             doctor(self.target)
@@ -261,3 +261,60 @@ class ExecutionRecoveryTests(unittest.TestCase):
         self.assertTrue(Path(backup).is_file())
         with self.store.engine.connect() as connection:
             self.assertIn("executions", __import__("sqlalchemy").inspect(connection).get_table_names())
+
+class ContextApprovalHandoffTests(unittest.TestCase):
+    def setUp(self):
+        from agent_system.infrastructure.database.store import Store
+        self.tmp=tempfile.TemporaryDirectory()
+        self.store=Store(Path(self.tmp.name)/"state.db")
+        self.store.initialize()
+    def tearDown(self):
+        self.store.close(); self.tmp.cleanup()
+    def test_context_revision_prevents_lost_update(self):
+        from agent_system.domain.errors import RevisionConflict
+        self.assertEqual(self.store.set_context("project",{"topic":"AMS"}),1)
+        value,revision=self.store.get_context("project")
+        self.assertEqual(value,{"topic":"AMS"})
+        self.assertEqual(self.store.set_context("project",{"topic":"V2"},expected_revision=revision),2)
+        with self.assertRaises(RevisionConflict): self.store.set_context("project",{},expected_revision=revision)
+    def test_approval_is_bound_to_digest_and_decided_once(self):
+        from datetime import timedelta
+        from agent_system.contracts.models import Approval,utcnow
+        from agent_system.domain.errors import StorageError
+        now=utcnow(); item=Approval(action_digest="a"*64,scope="target",policy_version="1",expires_at=now+timedelta(minutes=5))
+        self.store.save_approval(item)
+        approved=self.store.decide_approval(item.approval_id,decision="approved",actor="owner",now=now)
+        self.assertEqual(self.store.get_approval(item.approval_id),approved)
+        with self.assertRaises(StorageError): self.store.decide_approval(item.approval_id,decision="rejected",actor="owner",now=now)
+    def test_handoff_payload_digest_and_target_links_are_checked(self):
+        import hashlib,json
+        from agent_system.contracts.models import Handoff,Execution,utcnow
+        from agent_system.domain.lifecycle import TransitionFacts as F
+        from agent_system.domain.types import TaskStatus as S
+        from agent_system.infrastructure.database.store import StorageError
+        task=make_task();self.store.create_task(task)
+        # A linked Task and Execution are required before a Handoff is accepted.
+        agent=uuid4();task=Task.model_validate({**task.model_dump(),"assigned_agent":agent})
+        # Create a fresh assigned workflow state for a valid execution.
+        task2=make_task(assigned_agent=agent);self.store.create_task(task2)
+        task2=self.store.transition(task2.task_id,S.PLANNED,F(plan_recorded=True),expected_revision=0)
+        task2=self.store.transition(task2.task_id,S.READY,F(plan_recorded=True,policy_allowed=True),expected_revision=1)
+        task2=self.store.assign_agent(task2.task_id,agent,expected_revision=2)
+        task2=self.store.transition(task2.task_id,S.ASSIGNED,F(agent_selected=True,policy_allowed=True),expected_revision=3)
+        now=utcnow(); execution=Execution(task_id=task2.task_id,agent_id=agent,timeout_seconds=10,idempotency_key="handoff-1",owner_token=uuid4(),status="running",started_at=now,heartbeat_at=now,lease_expires_at=now+__import__("datetime").timedelta(seconds=10))
+        self.store.create_execution(execution)
+        payload={"expected_output":"report"}; digest=hashlib.sha256(json.dumps(payload,sort_keys=True,separators=(",",":"),ensure_ascii=False).encode()).hexdigest()
+        handoff=Handoff(task_id=task2.task_id,execution_id=execution.execution_id,input_digest="b"*64,payload=payload,payload_digest=digest)
+        self.assertEqual(self.store.save_handoff(handoff),handoff)
+        self.assertEqual(self.store.get_handoff(handoff.handoff_id),handoff)
+        with self.assertRaises(StorageError):
+            self.store.save_handoff(Handoff(task_id=task.task_id,execution_id=execution.execution_id,input_digest="b"*64,payload=payload,payload_digest=digest))
+    def test_backup_and_restore_are_verified_and_non_overwriting(self):
+        from agent_system.infrastructure.database.backup import backup_database,restore_database
+        from agent_system.infrastructure.database.store import StorageError
+        backup=Path(self.tmp.name)/"snap.db"; restored=Path(self.tmp.name)/"restored.db"
+        backup_database(self.store.path,backup);restore_database(backup,restored)
+        check=Store(restored)
+        try: check.verify()
+        finally: check.close()
+        with self.assertRaises(StorageError): restore_database(backup,restored)

@@ -25,6 +25,17 @@ def main(argv: list[str] | None = None) -> int:
     db = commands.add_parser("db", help="Initialize or verify explicit local storage")
     db.add_argument("action", choices=["init", "verify", "upgrade"])
     db.add_argument("path", type=Path)
+    backup = commands.add_parser("backup", help="Create a verified consistent SQLite backup")
+    backup.add_argument("database", type=Path)
+    backup.add_argument("destination", type=Path)
+    restore = commands.add_parser("restore", help="Restore a verified backup to a new path")
+    restore.add_argument("backup", type=Path)
+    restore.add_argument("destination", type=Path)
+    context = commands.add_parser("context", help="Read or write Target-local project context")
+    context.add_argument("action", choices=["get", "set"])
+    context.add_argument("database", type=Path)
+    context.add_argument("key")
+    context.add_argument("value", nargs="?", help="JSON value for set")
     recovery = commands.add_parser("recover", help="Mark expired executions unknown and repair Task state")
     recovery.add_argument("database", type=Path)
     task = commands.add_parser("task", help="Create or read tasks in existing storage")
@@ -41,6 +52,16 @@ def main(argv: list[str] | None = None) -> int:
                           "operational": False,
                           "message": "Task contracts, SQLite, local installer, Agent Registry and allowlisted internal workflow available."}))
         return 0
+    if args.command in {"backup", "restore"}:
+        from agent_system.infrastructure.database.backup import backup_database, restore_database
+        from agent_system.domain.errors import DomainError
+        try:
+            path = backup_database(args.database,args.destination) if args.command=="backup" else restore_database(args.backup,args.destination)
+            print(json.dumps({"database":str(path),"verified":True}))
+            return 0
+        except (DomainError,OSError,ValueError) as error:
+            print(json.dumps({"code":getattr(error,"code","BACKUP_FAILED"),"message":str(error)}),file=sys.stderr)
+            return 2
     if args.command in {"install", "doctor"}:
         from agent_system.infrastructure.installer import InstallError, doctor, install
         try:
@@ -51,7 +72,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"code": getattr(error, "code", "INSTALL_FAILED"),
                               "message": str(error)}, ensure_ascii=False), file=sys.stderr)
             return 2
-    if args.command in {"db", "task", "agent", "recover"}:
+    if args.command in {"db", "task", "agent", "recover", "context"}:
         from uuid import UUID
         from agent_system.contracts.models import Task
         from agent_system.domain.errors import DomainError
@@ -71,7 +92,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"database": str(path), "verified": True}))
             else:
                 store.verify()
-                if args.command == "recover":
+                if args.command == "context":
+                    if args.action == "get":
+                        value, revision = store.get_context(args.key)
+                        print(json.dumps({"key":args.key,"revision":revision,"value":value},ensure_ascii=False))
+                    else:
+                        if args.value is None: raise ValueError("JSON context value is required")
+                        revision = store.set_context(args.key,json.loads(args.value))
+                        print(json.dumps({"key":args.key,"revision":revision}))
+                elif args.command == "recover":
                     recovered = store.recover_expired_executions()
                     print(json.dumps({"recovered_execution_ids": [str(item) for item in recovered]}))
                 elif args.command == "agent":

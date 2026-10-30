@@ -182,3 +182,20 @@ class Approval(Contract):
         return self
 
 CONTRACTS = {c.__name__: c for c in (Agent, Task, Message, Execution, Result, Event, Approval, Artifact)}
+
+class Handoff(Contract):
+    handoff_id: UUID = Field(default_factory=uuid4)
+    task_id: UUID
+    execution_id: UUID
+    input_digest: Digest
+    created_at: datetime = Field(default_factory=utcnow)
+    payload: dict[str, JsonValue]
+    payload_digest: Digest
+
+    @model_validator(mode="after")
+    def digest_matches_payload(self) -> Self:
+        import hashlib, json
+        canonical = json.dumps(self.payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+        if hashlib.sha256(canonical).hexdigest() != self.payload_digest:
+            raise ValueError("handoff payload digest mismatch")
+        return self
