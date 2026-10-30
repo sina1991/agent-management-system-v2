@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import subprocess
+from unittest.mock import patch
 from pathlib import Path
 from uuid import uuid4
 from agent_system.application.workflow import run_task
@@ -60,3 +62,22 @@ class WorkflowTests(unittest.TestCase):
         with self.assertRaises(RegistryError):
             run_task(self.store, task.task_id)
         self.assertEqual(self.store.get_task(task.task_id).status, TaskStatus.CREATED)
+
+    def test_retry_is_explicit_bounded_and_only_for_timeout(self):
+        from agent_system.application.workflow import WorkflowError, retry_task
+        task = self.task({"value":"hello"})
+        with patch("agent_system.application.workflow._run_worker", side_effect=subprocess.TimeoutExpired("worker", 1)):
+            first = run_task(self.store, task.task_id, timeout_seconds=1)
+        self.assertEqual(first["result"]["error_code"], "WORKER_TIMEOUT")
+        second = retry_task(self.store, task.task_id)
+        self.assertEqual(second["attempt"], 2)
+        self.assertNotEqual(first["execution_id"], second["execution_id"])
+
+    def test_retry_refuses_verification_failure_and_wrong_states(self):
+        from agent_system.application.workflow import WorkflowError, retry_task
+        task = self.task({"value":"different"})
+        run_task(self.store, task.task_id)
+        with self.assertRaises(WorkflowError):
+            retry_task(self.store, task.task_id)
+        with self.assertRaises(WorkflowError):
+            run_task(self.store, task.task_id)

@@ -41,7 +41,7 @@ ams doctor /path/to/target-repository
 
 Installer کد نسخه فعلی Package را در `.agent-system/app/` کپی می‌کند، SQLite را آماده می‌کند و Manifest دارای Checksum می‌نویسد. این نصب Target از Source Repository یا URL دریافت نمی‌کند و محیط مجازی یا Dependencyهای Target را نصب نمی‌کند؛ Python باید Pydantic، SQLAlchemy و Alembic را از قبل داشته باشد. مسیر Target نباید پوشه رزروشده `.agent-system/` با محتوای قبلی داشته باشد.
 
-`task create` شناسه Task را برمی‌گرداند؛ سپس `ams task run DATABASE UUID` مسیر اجرا و Verify را طی می‌کند. مثال فعلی برای تکمیل موفق Task باید `verification_spec` را روی `json_equals` با خروجی مورد انتظار قرار دهد. `manual_review` به‌طور خودکار COMPLETED نمی‌شود. سپس با `ams task show DATABASE UUID` و `ams task history DATABASE UUID` اطلاعات آن را بخوانید. این دستورات Task را اجرا نمی‌کنند.
+`task create` شناسه Task را برمی‌گرداند؛ سپس `ams task run DATABASE UUID` مسیر اجرا و Verify را طی می‌کند؛ برای خطای Timeout می‌توان با `ams task retry DATABASE UUID` یک Attempt جدید درخواست کرد. مثال فعلی برای تکمیل موفق Task باید `verification_spec` را روی `json_equals` با خروجی مورد انتظار قرار دهد. `manual_review` به‌طور خودکار COMPLETED نمی‌شود. سپس با `ams task show DATABASE UUID` و `ams task history DATABASE UUID` اطلاعات آن را بخوانید. این دستورات Task را اجرا نمی‌کنند.
 
 `db init` فقط Database خالی را مقداردهی اولیه می‌کند؛ Schema ناشناخته را تغییر نمی‌دهد. Database آزمایشی را خارج از Git نگه دارید. محدودیت‌های فعلی و مرزهای API در [Contracts و Storage](docs/contracts-and-storage.md) آمده‌اند.
 

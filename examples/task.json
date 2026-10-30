@@ -1,8 +1,12 @@
 {
   "schema_version": "1.0",
-  "title": "بررسی مستندات پروژه",
-  "description": "بررسی ساختار و گزارش نواقص بدون تغییر Source",
-  "expected_output": "گزارش Markdown",
-  "acceptance_criteria": ["گزارش دارای شواهد قابل بررسی باشد"],
-  "verification_spec": {"verifier": "manual_review"}
+  "title": "نمونه اجرای Worker داخلی",
+  "description": "اجرای Worker قطعی text.echo برای نمایش مسیر Task",
+  "input": {"value": "hello"},
+  "expected_output": "JSON echo result",
+  "acceptance_criteria": ["Output JSON matches expected value"],
+  "verification_spec": {
+    "verifier": "json_equals",
+    "parameters": {"expected": {"value": "hello"}}
+  }
 }

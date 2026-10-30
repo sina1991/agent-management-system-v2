@@ -26,7 +26,7 @@ def main(argv: list[str] | None = None) -> int:
     db.add_argument("action", choices=["init", "verify"])
     db.add_argument("path", type=Path)
     task = commands.add_parser("task", help="Create or read tasks in existing storage")
-    task.add_argument("action", choices=["create", "show", "history"])
+    task.add_argument("action", choices=["create", "show", "history", "run", "retry"])
     task.add_argument("database", type=Path)
     task.add_argument("value", help="JSON file for create; UUID for show/history/run")
     agent = commands.add_parser("agent", help="Register or list internal workers")
@@ -78,9 +78,10 @@ def main(argv: list[str] | None = None) -> int:
                         print(registered.model_dump_json())
                     else:
                         print(json.dumps([a.model_dump(mode="json") for a in registry.list()], ensure_ascii=False))
-                elif args.action == "run":
-                    from agent_system.application.workflow import run_task
-                    print(json.dumps(run_task(store, UUID(args.value)), ensure_ascii=False))
+                elif args.action in {"run", "retry"}:
+                    from agent_system.application.workflow import retry_task, run_task
+                    action = retry_task if args.action == "retry" else run_task
+                    print(json.dumps(action(store, UUID(args.value)), ensure_ascii=False))
                 elif args.action == "create":
                     record = Task.model_validate_json(Path(args.value).read_text(encoding="utf-8"))
                     store.create_task(record)
