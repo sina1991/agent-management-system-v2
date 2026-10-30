@@ -322,4 +322,4 @@ class ContextApprovalHandoffTests(unittest.TestCase):
     def test_remote_source_rejects_embedded_credentials(self):
         from agent_system.infrastructure.installer import InstallError, install
         with self.assertRaises(InstallError):
-            install(self.path.parent,source_url="https://user:secret@example.com/repo.git")
+            install(self.store.path.parent,source_url="https://user:secret@example.com/repo.git")
