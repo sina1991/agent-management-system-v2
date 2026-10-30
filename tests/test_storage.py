@@ -143,7 +143,7 @@ class InstallerTests(unittest.TestCase):
         result = install(self.target)
         self.assertEqual(result["status"], "verified")
         self.assertGreater(result["file_count"], 10)
-        app = self.target/".agent-system"/"app"/"0.5.0.dev0"
+        app = self.target/".agent-system"/"app"/"0.6.0.dev0"
         self.assertTrue((app/"agent_system"/"infrastructure"/"database"/"migrations"/"versions"/"0001_initial.py").is_file())
         self.assertEqual(doctor(self.target)["database"], "verified")
         store = Store(self.target/".agent-system"/"state"/"system.db")
@@ -176,7 +176,7 @@ class InstallerTests(unittest.TestCase):
     def test_doctor_detects_release_tampering_and_missing_db(self):
         from agent_system.infrastructure.installer import InstallError, doctor, install
         install(self.target)
-        release = self.target/".agent-system"/"app"/"0.5.0.dev0"/"agent_system"/"__init__.py"
+        release = self.target/".agent-system"/"app"/"0.6.0.dev0"/"agent_system"/"__init__.py"
         release.write_text(release.read_text()+"# changed\n")
         with self.assertRaises(InstallError):
             doctor(self.target)
@@ -318,3 +318,8 @@ class ContextApprovalHandoffTests(unittest.TestCase):
         try: check.verify()
         finally: check.close()
         with self.assertRaises(StorageError): restore_database(backup,restored)
+
+    def test_remote_source_rejects_embedded_credentials(self):
+        from agent_system.infrastructure.installer import InstallError, install
+        with self.assertRaises(InstallError):
+            install(self.path.parent,source_url="https://user:secret@example.com/repo.git")

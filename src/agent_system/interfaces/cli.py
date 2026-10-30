@@ -15,6 +15,7 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser("status", help="Report the software implementation stage")
     installer = commands.add_parser("install", help="Install current V2 package into a Git Target")
     installer.add_argument("target", type=Path)
+    installer.add_argument("--source-url", help="Credential-free HTTPS Git URL for a complete V2 source repository")
     check = commands.add_parser("doctor", help="Verify an installed V2 Target")
     check.add_argument("target", type=Path)
     schema = commands.add_parser("schema", help="Print a contract JSON Schema")
@@ -65,7 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command in {"install", "doctor"}:
         from agent_system.infrastructure.installer import InstallError, doctor, install
         try:
-            result = install(args.target) if args.command == "install" else doctor(args.target)
+            result = install(args.target, source_url=args.source_url) if args.command == "install" else doctor(args.target)
             print(json.dumps(result, ensure_ascii=False))
             return 0
         except (InstallError, OSError, ValueError) as error:

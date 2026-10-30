@@ -35,7 +35,7 @@ ams db verify /tmp/ams-demo/system.db
 برای نصب نسخه فعلی روی یک Checkout آزمایشی Git:
 
 ```bash
-ams install /path/to/target-repository
+ams install /path/to/target-repository --source-url https://github.com/OWNER/agent-management-system-v2.git
 ams doctor /path/to/target-repository
 ```
 
