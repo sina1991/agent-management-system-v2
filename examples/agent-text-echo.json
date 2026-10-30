@@ -1,0 +1,12 @@
+{
+  "schema_version": "1.0",
+  "name": "internal-text-echo",
+  "role": "deterministic example worker",
+  "description": "Returns an input value unchanged for workflow demonstrations",
+  "capabilities": ["task.execute"],
+  "runtime": "python-worker",
+  "provider": "text.echo",
+  "permissions": ["read"],
+  "version": "1.0.0",
+  "kind": "internal"
+}

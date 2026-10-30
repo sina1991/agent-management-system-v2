@@ -97,6 +97,28 @@ class Store:
             raise StorageError("duplicate task or event") from error
         return created
 
+    def assign_agent(self, task_id: UUID, agent_id: UUID, *, expected_revision: int) -> Task:
+        """Bind a selected Agent to a READY Task with optimistic concurrency."""
+        with self.engine.begin() as connection:
+            payload = connection.execute(select(tasks.c.payload).where(tasks.c.task_id == str(task_id))).scalar_one_or_none()
+            if payload is None:
+                raise KeyError(task_id)
+            task = Task.model_validate_json(payload)
+            if task.status != TaskStatus.READY or task.revision != expected_revision:
+                raise RevisionConflict("task is not READY at the expected revision")
+            updated = Task.model_validate({**task.model_dump(), "assigned_agent": agent_id,
+                                           "revision": task.revision + 1})
+            changed = Event(event_type="task.agent_assigned", correlation_id=task.task_id,
+                            payload={"task_id": str(task.task_id), "agent_id": str(agent_id),
+                                     "revision": updated.revision})
+            result = connection.execute(update(tasks).where(tasks.c.task_id == str(task_id),
+                                        tasks.c.revision == expected_revision).values(
+                                            revision=updated.revision, payload=updated.model_dump_json()))
+            if result.rowcount != 1:
+                raise RevisionConflict("task revision changed")
+            self._append_event(connection, changed)
+        return updated
+
     def get_task(self, task_id: UUID) -> Task:
         with self.engine.connect() as connection:
             row = connection.execute(select(tasks.c.payload).where(tasks.c.task_id == str(task_id))).scalar_one_or_none()

@@ -28,12 +28,16 @@ def main(argv: list[str] | None = None) -> int:
     task = commands.add_parser("task", help="Create or read tasks in existing storage")
     task.add_argument("action", choices=["create", "show", "history"])
     task.add_argument("database", type=Path)
-    task.add_argument("value", help="JSON file for create; UUID for show/history")
+    task.add_argument("value", help="JSON file for create; UUID for show/history/run")
+    agent = commands.add_parser("agent", help="Register or list internal workers")
+    agent.add_argument("action", choices=["register", "list"])
+    agent.add_argument("database", type=Path)
+    agent.add_argument("file", nargs="?", type=Path, help="Agent JSON for register")
     args = parser.parse_args(argv)
     if args.command == "status":
-        print(json.dumps({"version": __version__, "stage": "installer_foundation",
+        print(json.dumps({"version": __version__, "stage": "vertical_task_path",
                           "operational": False,
-                          "message": "Contracts, task persistence, local installer and doctor available; execution runtime pending."}))
+                          "message": "Task contracts, SQLite, local installer, Agent Registry and allowlisted internal workflow available."}))
         return 0
     if args.command in {"install", "doctor"}:
         from agent_system.infrastructure.installer import InstallError, doctor, install
@@ -45,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"code": getattr(error, "code", "INSTALL_FAILED"),
                               "message": str(error)}, ensure_ascii=False), file=sys.stderr)
             return 2
-    if args.command in {"db", "task"}:
+    if args.command in {"db", "task", "agent"}:
         from uuid import UUID
         from agent_system.contracts.models import Task
         from agent_system.domain.errors import DomainError
@@ -63,7 +67,21 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"database": str(path), "verified": True}))
             else:
                 store.verify()
-                if args.action == "create":
+                if args.command == "agent":
+                    from agent_system.contracts.models import Agent
+                    from agent_system.infrastructure.registry import AgentRegistry
+                    registry = AgentRegistry(store)
+                    if args.action == "register":
+                        if args.file is None:
+                            raise ValueError("Agent JSON file is required")
+                        registered = registry.register(Agent.model_validate_json(args.file.read_text(encoding="utf-8")))
+                        print(registered.model_dump_json())
+                    else:
+                        print(json.dumps([a.model_dump(mode="json") for a in registry.list()], ensure_ascii=False))
+                elif args.action == "run":
+                    from agent_system.application.workflow import run_task
+                    print(json.dumps(run_task(store, UUID(args.value)), ensure_ascii=False))
+                elif args.action == "create":
                     record = Task.model_validate_json(Path(args.value).read_text(encoding="utf-8"))
                     store.create_task(record)
                     print(json.dumps({"task_id": str(record.task_id), "status": record.status.value}))
