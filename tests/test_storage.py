@@ -197,11 +197,11 @@ class ExecutionRecoveryTests(unittest.TestCase):
         from agent_system.contracts.models import Execution, utcnow
         from agent_system.domain.lifecycle import TransitionFacts as F
         from agent_system.domain.types import TaskStatus as S
-        task = make_task()
+        agent_id = uuid4()
+        task = make_task(assigned_agent=agent_id)
         self.store.create_task(task)
         task = self.store.transition(task.task_id, S.PLANNED, F(plan_recorded=True), expected_revision=0)
         task = self.store.transition(task.task_id, S.READY, F(plan_recorded=True, policy_allowed=True), expected_revision=1)
-        agent_id = uuid4()
         task = self.store.assign_agent(task.task_id, agent_id, expected_revision=2)
         execution = Execution(task_id=task.task_id, agent_id=agent_id, timeout_seconds=3,
             idempotency_key=f"{task.task_id}:1", owner_token=uuid4(), status="running",
