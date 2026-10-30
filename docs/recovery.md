@@ -1,9 +1,9 @@
-# Timeout و Retry
+# ذخیره Execution، Result و Recovery
 
-Worker داخلی در Process جداگانه با `python -I` اجرا می‌شود. ورودی و خروجی JSON محدودند، Environment فرزند به متغیرهای پایه محدود می‌شود و استثنای داخلی Worker به کاربر نشت نمی‌کند. Timeout واقعی Process را می‌بندد و نتیجه `WORKER_TIMEOUT` ثبت می‌شود. این جداسازی Sandbox امنیتی نیست؛ Workerهای allowlist باید مورد اعتماد و بدون اثر جانبی باشند.
+Migration `0002` جداول مستقل `executions` و `results` را می‌سازد. Unique constraint روی `idempotency_key` و Result برای هر Execution تکرار ثبت را متوقف می‌کند. شروع Execution، پایان Execution/Result و Eventهایشان پایدارند. شمار Attempts از جداول Execution خوانده می‌شود.
 
-Retry خودکار نیست. پس از Timeout، کاربر یا Orchestrator می‌تواند `ams task retry DATABASE TASK_UUID` اجرا کند. سقف Attempts سه است و هر بار `execution_id` و `idempotency_key` جدید می‌گیرد. Retry فقط برای Resultای مجاز است که `retryable=true` داشته باشد. شکست Verify، خطای ورودی و خطای عمومی Worker به‌طور خودکار قابل Retry نیستند.
+برای Database قدیمی، ابتدا Backup خارج از مخزن ایجاد کنید، سپس `ams db upgrade DATABASE` را اجرا کنید. این فرمان پیش از Upgrade از SQLite Backup API استفاده می‌کند و نسخه قبلی را در فایل `.pre-upgrade.bak` کنار Database نگه می‌دارد. اگر ارتقا شکست بخورد، فایل Database از Backup بازگردانده می‌شود. وجود Backup هم‌نام مانع اجرای بعدی می‌شود تا ابتدا آن را بررسی کنید. `ams db verify` نسخه Schema را بررسی می‌کند و خودش Upgrade انجام نمی‌دهد.
 
-خروجی مبهم در این Workerهای بدون اثر جانبی پس از Timeout قابل تکرار است. برای Runtimeهای دارای اثر جانبی، Timeout به معنی نامشخص‌بودن اثر عملیات است و retry خودکار باید تا پیاده‌سازی Idempotency و Recovery مسدود بماند.
+`ams recover DATABASE` اجراهای دارای Lease منقضی را اتمی به Execution=`unknown` و Result=`unknown` تبدیل می‌کند و Task درحال اجرا را به FAILED می‌برد. اجرای دوباره Recovery همان Attempt را تکرار نمی‌کند. Result مبهم retryable نیست؛ اجرای مجدد باید پس از بررسی انسانی و سیاست اثر عملیات انجام شود.
 
-محدودیت‌های باز: Lease Recovery پس از Crash کامل Orchestrator، مالکیت چند Worker، Heartbeat واقعی، Cancel API و persistence اختصاصی Execution جدول مستقل هنوز وجود ندارند. وضعیت Attemptها موقتاً در جدول configuration ذخیره می‌شود.
+Recovery مبتنی بر Lease است، نه اثبات پایان Process خارجی. Worker فعلی بدون اثر جانبی طراحی شده است؛ برای Runtime دارای اثر بیرونی، اجرای Task نامشخص نباید خودکار تکرار شود. Lease دقیق، Heartbeat پیوسته و مالکیت چند Orchestrator در این مرحله وجود ندارند.

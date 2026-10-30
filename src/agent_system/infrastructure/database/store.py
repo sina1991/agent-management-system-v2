@@ -1,5 +1,8 @@
 """Transactional SQLite storage for tasks, events and shared configuration."""
 import json
+import sqlite3
+import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from uuid import UUID
 
@@ -11,14 +14,14 @@ from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
 
 from agent_system.application.tasks import transition_task
-from agent_system.contracts.models import Event, Task
+from agent_system.contracts.models import Event, Execution, Result, Task
 from agent_system.domain.dependencies import validate_graph
 from agent_system.domain.errors import DomainError, RevisionConflict
 from agent_system.domain.lifecycle import TransitionFacts
 from agent_system.domain.types import TaskStatus
-from agent_system.infrastructure.database.schema import configuration, events, tasks
+from agent_system.infrastructure.database.schema import configuration, events, executions, results, tasks
 
-SCHEMA_REVISION = "0001"
+SCHEMA_REVISION = "0002"
 
 
 class StorageError(DomainError):
@@ -65,12 +68,50 @@ class Store:
         required = {"tasks", "events", "configuration", "alembic_version"}
         if not required.issubset(inspect(connection).get_table_names()):
             raise StorageError("required tables missing")
-        for table in (tasks, events, configuration):
+        for table in (tasks, events, configuration, executions, results):
             columns = {column["name"] for column in inspect(connection).get_columns(table.name)}
             if not set(table.columns.keys()).issubset(columns):
                 raise StorageError(f"required columns missing: {table.name}")
         if connection.exec_driver_sql("PRAGMA quick_check").scalar_one() != "ok":
             raise StorageError("SQLite integrity check failed")
+
+    def upgrade(self):
+        """Explicitly migrate with a SQLite-consistent backup and restore on failure."""
+        if not self.path.is_file():
+            raise StorageError("database missing")
+        self.close()
+        backup = self.path.with_name(self.path.name + ".pre-upgrade.bak")
+        if backup.exists():
+            raise StorageError("pre-upgrade backup already exists; inspect it before retrying")
+        try:
+            with sqlite3.connect(self.path) as source, sqlite3.connect(backup) as destination:
+                source.backup(destination)
+            self.engine = create_engine(URL.create("sqlite", database=str(self.path)))
+            @event.listens_for(self.engine, "connect")
+            def sqlite_options(connection, _):
+                connection.isolation_level = None
+                cursor = connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.close()
+            @event.listens_for(self.engine, "begin")
+            def explicit_begin(connection): connection.exec_driver_sql("BEGIN")
+            with self.engine.begin() as connection:
+                config = Config()
+                config.set_main_option("script_location", str(Path(__file__).parent / "migrations"))
+                config.attributes["connection"] = connection
+                command.upgrade(config, "head")
+                self._verify_connection(connection)
+        except Exception:
+            self.close()
+            if backup.exists():
+                restore = self.path.with_name(self.path.name + ".restore.tmp")
+                with sqlite3.connect(backup) as source, sqlite3.connect(restore) as destination:
+                    source.backup(destination)
+                restore.replace(self.path)
+            self.engine = create_engine(URL.create("sqlite", database=str(self.path)))
+            raise
+        return str(backup)
 
     def verify(self):
         if not self.path.is_file():
@@ -146,6 +187,98 @@ class Store:
                 raise RevisionConflict("task revision changed")
             self._append_event(connection, changed)
         return updated
+
+    def create_execution(self, execution: Execution) -> Event:
+        with self.engine.begin() as connection:
+            row = connection.execute(select(tasks.c.payload).where(tasks.c.task_id == str(execution.task_id))).scalar_one_or_none()
+            if row is None: raise KeyError(execution.task_id)
+            task = Task.model_validate_json(row)
+            if task.status != TaskStatus.ASSIGNED or task.assigned_agent != execution.agent_id:
+                raise StorageError("Execution Agent does not match assigned Task")
+            connection.execute(executions.insert().values(execution_id=str(execution.execution_id),
+                task_id=str(execution.task_id), attempt=execution.attempt, status=execution.status,
+                lease_expires_at=execution.lease_expires_at.isoformat(), payload=execution.model_dump_json(),
+                idempotency_key=execution.idempotency_key))
+            record = Event(event_type="execution.started", correlation_id=execution.task_id,
+                payload={"execution_id":str(execution.execution_id),"attempt":execution.attempt})
+            self._append_event(connection, record)
+        return record
+
+    def finish_execution(self, execution_id: UUID, result: Result, *, status: str) -> Event:
+        if status not in {"succeeded", "failed", "cancelled", "unknown"} or result.execution_id != execution_id or result.status != status:
+            raise StorageError("Execution and Result status mismatch")
+        with self.engine.begin() as connection:
+            row = connection.execute(select(executions).where(executions.c.execution_id == str(execution_id))).mappings().first()
+            if row is None: raise KeyError(execution_id)
+            execution = Execution.model_validate_json(row["payload"])
+            if execution.status != "running": raise StorageError("Execution is already terminal")
+            terminal_execution = execution.model_copy(update={"status": status})
+            connection.execute(update(executions).where(executions.c.execution_id == str(execution_id),
+                executions.c.status == "running").values(status=status, payload=terminal_execution.model_dump_json()))
+            connection.execute(results.insert().values(result_id=str(result.result_id),
+                execution_id=str(result.execution_id), status=result.status, payload=result.model_dump_json()))
+            record = Event(event_type="execution.finished", correlation_id=execution.task_id,
+                payload={"execution_id":str(execution_id),"status":status,"result_id":str(result.result_id)})
+            self._append_event(connection, record)
+        return record
+
+    def get_execution(self, execution_id: UUID) -> Execution:
+        with self.engine.connect() as connection:
+            row = connection.execute(select(executions.c.payload, executions.c.status).where(executions.c.execution_id == str(execution_id))).first()
+        if row is None: raise KeyError(execution_id)
+        return Execution.model_validate_json(row.payload).model_copy(update={"status": row.status})
+
+    def get_result(self, execution_id: UUID) -> Result:
+        with self.engine.connect() as connection:
+            row = connection.execute(select(results.c.payload).where(results.c.execution_id == str(execution_id))).scalar_one_or_none()
+        if row is None: raise KeyError(execution_id)
+        return Result.model_validate_json(row)
+
+    def latest_execution_id(self, task_id: UUID) -> UUID:
+        with self.engine.connect() as connection:
+            value = connection.execute(select(executions.c.execution_id).where(
+                executions.c.task_id == str(task_id)).order_by(executions.c.attempt.desc()).limit(1)).scalar_one_or_none()
+        if value is None: raise KeyError(task_id)
+        return UUID(value)
+
+    def execution_attempts(self, task_id: UUID) -> int:
+        with self.engine.connect() as connection:
+            return connection.execute(select(executions.c.attempt).where(executions.c.task_id == str(task_id)).order_by(executions.c.attempt.desc()).limit(1)).scalar_one_or_none() or 0
+
+    def recover_expired_executions(self, *, now: datetime | None = None) -> list[UUID]:
+        now = now or datetime.now(timezone.utc)
+        recovered = []
+        with self.engine.connect() as connection:
+            rows = connection.execute(select(executions).where(executions.c.status == "running")).mappings().all()
+        for row in rows:
+            execution = Execution.model_validate_json(row["payload"])
+            if execution.lease_expires_at > now: continue
+            unknown = Result(execution_id=execution.execution_id, status="unknown", error_code="EXECUTION_LOST")
+            with self.engine.begin() as connection:
+                current = connection.execute(select(executions.c.payload).where(
+                    executions.c.execution_id == str(execution.execution_id), executions.c.status == "running")).scalar_one_or_none()
+                if current is None: continue
+                current_execution = Execution.model_validate_json(current)
+                if current_execution.lease_expires_at > now: continue
+                task_payload = connection.execute(select(tasks.c.payload).where(tasks.c.task_id == str(execution.task_id))).scalar_one_or_none()
+                if task_payload is None: raise StorageError("orphan Execution references missing Task")
+                task = Task.model_validate_json(task_payload)
+                connection.execute(update(executions).where(executions.c.execution_id == str(execution.execution_id),
+                    executions.c.status == "running").values(status="unknown"))
+                connection.execute(results.insert().values(result_id=str(unknown.result_id),
+                    execution_id=str(unknown.execution_id), status=unknown.status, payload=unknown.model_dump_json()))
+                if task.status == TaskStatus.RUNNING:
+                    updated, changed = transition_task(task, TaskStatus.FAILED,
+                        TransitionFacts(result_recorded=True, execution_stopped=True, reason="orchestrator recovery: lease expired"),
+                        expected_revision=task.revision)
+                    connection.execute(update(tasks).where(tasks.c.task_id == str(task.task_id),
+                        tasks.c.revision == task.revision).values(revision=updated.revision, payload=updated.model_dump_json()))
+                    self._append_event(connection, changed)
+                event_record = Event(event_type="execution.recovered_unknown", correlation_id=execution.task_id,
+                    payload={"execution_id":str(execution.execution_id),"result_id":str(unknown.result_id)})
+                self._append_event(connection, event_record)
+                recovered.append(execution.execution_id)
+        return recovered
 
     @staticmethod
     def _append_event(connection, event_record: Event):

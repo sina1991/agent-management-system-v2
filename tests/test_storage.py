@@ -143,7 +143,7 @@ class InstallerTests(unittest.TestCase):
         result = install(self.target)
         self.assertEqual(result["status"], "verified")
         self.assertGreater(result["file_count"], 10)
-        app = self.target/".agent-system"/"app"/"0.3.0.dev0"
+        app = self.target/".agent-system"/"app"/"0.4.0.dev0"
         self.assertTrue((app/"agent_system"/"infrastructure"/"database"/"migrations"/"versions"/"0001_initial.py").is_file())
         self.assertEqual(doctor(self.target)["database"], "verified")
         store = Store(self.target/".agent-system"/"state"/"system.db")
@@ -176,7 +176,88 @@ class InstallerTests(unittest.TestCase):
     def test_doctor_detects_release_tampering_and_missing_db(self):
         from agent_system.infrastructure.installer import InstallError, doctor, install
         install(self.target)
-        release = self.target/".agent-system"/"app"/"0.3.0.dev0"/"agent_system"/"__init__.py"
+        release = self.target/".agent-system"/"app"/"0.4.0.dev0"/"agent_system"/"__init__.py"
         release.write_text(release.read_text()+"# changed\n")
         with self.assertRaises(InstallError):
             doctor(self.target)
+
+class ExecutionRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.path = Path(self.tmp.name)/"state.db"
+        self.store = Store(self.path)
+        self.store.initialize()
+
+    def tearDown(self):
+        self.store.close()
+        self.tmp.cleanup()
+
+    def _running_execution(self):
+        from datetime import timedelta
+        from agent_system.contracts.models import Execution, utcnow
+        from agent_system.domain.lifecycle import TransitionFacts as F
+        from agent_system.domain.types import TaskStatus as S
+        task = make_task()
+        self.store.create_task(task)
+        task = self.store.transition(task.task_id, S.PLANNED, F(plan_recorded=True), expected_revision=0)
+        task = self.store.transition(task.task_id, S.READY, F(plan_recorded=True, policy_allowed=True), expected_revision=1)
+        agent_id = uuid4()
+        task = self.store.assign_agent(task.task_id, agent_id, expected_revision=2)
+        execution = Execution(task_id=task.task_id, agent_id=agent_id, timeout_seconds=3,
+            idempotency_key=f"{task.task_id}:1", owner_token=uuid4(), status="running",
+            started_at=utcnow()-timedelta(minutes=1), heartbeat_at=utcnow()-timedelta(minutes=1),
+            lease_expires_at=utcnow()-timedelta(seconds=1))
+        self.store.create_execution(execution)
+        self.store.transition(task.task_id, S.ASSIGNED,
+            F(agent_selected=True, policy_allowed=True), expected_revision=3)
+        self.store.transition(task.task_id, S.RUNNING,
+            F(agent_selected=True, execution_created=True, policy_allowed=True), expected_revision=4)
+        return task.task_id, execution
+
+    def test_execution_and_result_are_separate_and_terminal_once(self):
+        from agent_system.contracts.models import Result
+        task_id, execution = self._running_execution()
+        result = Result(execution_id=execution.execution_id, status="succeeded", output={"value":1})
+        self.store.finish_execution(execution.execution_id, result, status="succeeded")
+        self.assertEqual(self.store.get_execution(execution.execution_id).status, "succeeded")
+        # Execution contract is immutable; terminal state is reflected by the dedicated row.
+        self.assertEqual(self.store.get_result(execution.execution_id), result)
+
+    def test_expired_attempt_recovered_atomically_and_idempotently(self):
+        from agent_system.domain.types import TaskStatus
+        task_id, execution = self._running_execution()
+        self.assertEqual(self.store.recover_expired_executions(), [execution.execution_id])
+        self.assertEqual(self.store.get_task(task_id).status, TaskStatus.FAILED)
+        self.assertEqual(self.store.get_result(execution.execution_id).status, "unknown")
+        self.assertEqual(self.store.recover_expired_executions(), [])
+
+    def test_live_lease_is_left_running(self):
+        from datetime import timedelta
+        from agent_system.contracts.models import utcnow
+        task_id, execution = self._running_execution()
+        self.assertEqual(self.store.recover_expired_executions(now=utcnow()-timedelta(minutes=2)), [])
+        self.assertEqual(self.store.get_task(task_id).status.value, "RUNNING")
+
+    def test_explicit_upgrade_from_0001_keeps_backup_and_existing_rows(self):
+        import shutil
+        from alembic import command
+        from alembic.config import Config
+        from sqlalchemy import create_engine
+        self.store.close()
+        shutil.rmtree(self.path.parent)
+        self.path.parent.mkdir()
+        self.store = Store(self.path)
+        config = Config()
+        config.set_main_option("script_location", str(Path(__file__).parents[1]/"src/agent_system/infrastructure/database/migrations"))
+        engine = create_engine(f"sqlite:///{self.path}")
+        with engine.begin() as connection:
+            config.attributes["connection"] = connection
+            command.upgrade(config, "0001")
+        engine.dispose()
+        self.store.close()
+        self.store = Store(self.path)
+        backup = self.store.upgrade()
+        self.store.verify()
+        self.assertTrue(Path(backup).is_file())
+        with self.store.engine.connect() as connection:
+            self.assertIn("executions", __import__("sqlalchemy").inspect(connection).get_table_names())

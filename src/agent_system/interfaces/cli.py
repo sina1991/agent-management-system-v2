@@ -23,8 +23,10 @@ def main(argv: list[str] | None = None) -> int:
     validate.add_argument("contract", choices=sorted(CONTRACTS))
     validate.add_argument("file", type=Path)
     db = commands.add_parser("db", help="Initialize or verify explicit local storage")
-    db.add_argument("action", choices=["init", "verify"])
+    db.add_argument("action", choices=["init", "verify", "upgrade"])
     db.add_argument("path", type=Path)
+    recovery = commands.add_parser("recover", help="Mark expired executions unknown and repair Task state")
+    recovery.add_argument("database", type=Path)
     task = commands.add_parser("task", help="Create or read tasks in existing storage")
     task.add_argument("action", choices=["create", "show", "history", "run", "retry"])
     task.add_argument("database", type=Path)
@@ -49,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"code": getattr(error, "code", "INSTALL_FAILED"),
                               "message": str(error)}, ensure_ascii=False), file=sys.stderr)
             return 2
-    if args.command in {"db", "task", "agent"}:
+    if args.command in {"db", "task", "agent", "recover"}:
         from uuid import UUID
         from agent_system.contracts.models import Task
         from agent_system.domain.errors import DomainError
@@ -63,11 +65,16 @@ def main(argv: list[str] | None = None) -> int:
         store = Store(path)
         try:
             if args.command == "db":
-                store.initialize() if args.action == "init" else store.verify()
+                if args.action == "init": store.initialize()
+                elif args.action == "upgrade": store.upgrade()
+                else: store.verify()
                 print(json.dumps({"database": str(path), "verified": True}))
             else:
                 store.verify()
-                if args.command == "agent":
+                if args.command == "recover":
+                    recovered = store.recover_expired_executions()
+                    print(json.dumps({"recovered_execution_ids": [str(item) for item in recovered]}))
+                elif args.command == "agent":
                     from agent_system.contracts.models import Agent
                     from agent_system.infrastructure.registry import AgentRegistry
                     registry = AgentRegistry(store)

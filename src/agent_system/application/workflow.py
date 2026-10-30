@@ -43,17 +43,17 @@ def retry_task(store: Store, task_id) -> dict:
     task = store.get_task(task_id)
     if task.status != S.FAILED:
         raise WorkflowError("only FAILED tasks can be retried")
-    attempts = store.get_config(f"task:{task_id}:attempts")
+    attempts = store.execution_attempts(task_id)
     if attempts >= MAX_ATTEMPTS:
         raise WorkflowError("retry budget exhausted")
-    last_id = store.get_config(f"task:{task_id}:latest_execution")
-    last = store.get_config(f"result:{last_id}")
-    if not last.get("retryable", False):
+    last_id = store.latest_execution_id(task_id)
+    last = store.get_result(last_id)
+    if not last.retryable:
         raise WorkflowError("last failure is not classified as retryable")
     store.transition(task.task_id, S.PLANNED,
         Facts(plan_recorded=True, retry_available=True, reason="explicit retry requested"),
         expected_revision=task.revision)
-    return run_task(store, task_id, timeout_seconds=store.get_config(f"task:{task_id}:timeout"))
+    return run_task(store, task_id, timeout_seconds=30)
 
 
 def run_task(store: Store, task_id, *, timeout_seconds: int = 30) -> dict:
@@ -62,7 +62,7 @@ def run_task(store: Store, task_id, *, timeout_seconds: int = 30) -> dict:
     task = store.get_task(task_id)
     if task.status not in {S.CREATED, S.PLANNED}:
         raise WorkflowError(f"task must be CREATED or PLANNED; found {task.status}")
-    attempts = store.get_config(f"task:{task_id}:attempts") if task.status == S.PLANNED else 0
+    attempts = store.execution_attempts(task_id) if task.status == S.PLANNED else 0
     if attempts >= MAX_ATTEMPTS:
         raise WorkflowError("retry budget exhausted")
     agent = AgentRegistry(store).select("task.execute")
@@ -72,15 +72,12 @@ def run_task(store: Store, task_id, *, timeout_seconds: int = 30) -> dict:
     task = store.assign_agent(task.task_id, agent.agent_id, expected_revision=task.revision)
     task = store.transition(task.task_id, S.ASSIGNED, Facts(agent_selected=True, policy_allowed=True), expected_revision=task.revision)
     attempts += 1
-    store.set_config(f"task:{task_id}:attempts", attempts)
-    store.set_config(f"task:{task_id}:timeout", timeout_seconds)
     now = utcnow()
     execution = Execution(task_id=task.task_id, agent_id=agent.agent_id, attempt=attempts,
         timeout_seconds=timeout_seconds, idempotency_key=f"{task.task_id}:{attempts}",
         owner_token=uuid4(), status="running", started_at=now, heartbeat_at=now,
         lease_expires_at=now + timedelta(seconds=timeout_seconds))
-    store.set_config(f"task:{task_id}:latest_execution", str(execution.execution_id))
-    store.set_config(f"execution:{execution.execution_id}", json.loads(execution.model_dump_json()))
+    store.create_execution(execution)
     task = store.transition(task.task_id, S.RUNNING,
         Facts(agent_selected=True, execution_created=True, policy_allowed=True), expected_revision=task.revision)
     try:
@@ -95,9 +92,8 @@ def run_task(store: Store, task_id, *, timeout_seconds: int = 30) -> dict:
         verified = False
         result = Result(execution_id=execution.execution_id, status="failed",
                         error_code="WORKER_FAILED", retryable=False)
-    store.set_config(f"result:{execution.execution_id}", json.loads(result.model_dump_json()))
-    store.set_config(f"execution:{execution.execution_id}", {**json.loads(execution.model_dump_json()),
-                     "status": "succeeded" if result.status == "succeeded" else "failed"})
+    store.finish_execution(execution.execution_id, result,
+        status="succeeded" if result.status == "succeeded" else "failed")
     reason = "" if verified else "worker result did not pass the declared verifier"
     task = store.transition(task.task_id, S.REVIEW if result.status == "succeeded" else S.FAILED,
         Facts(result_recorded=True, execution_stopped=True, reason=reason), expected_revision=task.revision)

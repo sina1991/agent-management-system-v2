@@ -122,7 +122,7 @@ def install(target: Path) -> dict:
         if not config.exists():
             config.write_text(json.dumps({"schema_version": 1}, indent=2) + "\n", encoding="utf-8")
         manifest = {"manifest_version": 1, "installation_id": str(uuid4()),
-                    "release_version": __version__, "schema_version": "0001",
+                    "release_version": __version__, "schema_version": "0002",
                     "release_path": release_name, "files": inventory,
                     "dependencies": deps, "installation_status": "verified",
                     "installed_at": datetime.now(timezone.utc).isoformat()}
