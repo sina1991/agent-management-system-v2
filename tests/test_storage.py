@@ -280,7 +280,7 @@ class ContextApprovalHandoffTests(unittest.TestCase):
     def test_approval_is_bound_to_digest_and_decided_once(self):
         from datetime import timedelta
         from agent_system.contracts.models import Approval,utcnow
-        from agent_system.domain.errors import StorageError
+        from agent_system.infrastructure.database.store import StorageError
         now=utcnow(); item=Approval(action_digest="a"*64,scope="target",policy_version="1",expires_at=now+timedelta(minutes=5))
         self.store.save_approval(item)
         approved=self.store.decide_approval(item.approval_id,decision="approved",actor="owner",now=now)
