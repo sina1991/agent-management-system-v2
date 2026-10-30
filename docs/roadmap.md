@@ -3,9 +3,9 @@
 | مرحله | خروجی | معیار پذیرش | وضعیت |
 | --- | --- | --- | --- |
 | 0 | Specification و ADR | تصمیم‌ها ثبت شوند | ثبت شده |
-| 1 | Python Package، CLI و CI | نصب تمیز و CI موفق | پیاده‌سازی اولیه |
-| 2 | Contracts و State Machine | ورودی و انتقال نامعتبر رد شوند | برنامه‌ریزی شده |
-| 3 | Storage و Events | حفظ داده پس از Restart | برنامه‌ریزی شده |
+| 1 | Python Package، CLI و CI | نصب تمیز و CI موفق | CI اولیه موفق؛ توسعه یافته |
+| 2 | Contracts و State Machine | ورودی و انتقال نامعتبر رد شوند | پیاده‌سازی و تست شده |
+| 3 | Storage و Events | حفظ داده پس از Restart | Storage اولیه Task/Event/Config پیاده‌سازی و تست شده |
 | 4 | Installer و doctor | نصب مجدد بدون حذف داده | برنامه‌ریزی شده |
 | 5 | مسیر کامل یک Task | اجرا و Verify واقعی | برنامه‌ریزی شده |
 | 6 | Recovery اجرا | مدیریت قطع Worker و نتیجه دیررس | برنامه‌ریزی شده |

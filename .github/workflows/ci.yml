@@ -1,4 +1,4 @@
-name: Foundation CI
+name: Core CI
 on:
   push:
   pull_request:
@@ -13,11 +13,14 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install package
-        run: python -m pip install .
-      - name: Test CLI contract
+        run: python -m pip install -c requirements.lock.txt .
+      - name: Test contracts, lifecycle and SQLite transactions
         run: python -m unittest discover -s tests -v
       - name: Check installed entry point
         working-directory: /tmp
         run: |
           ams --version
           ams status
+          ams schema Task > /tmp/ams-task-schema.json
+          ams db init /tmp/ams-ci/system.db
+          ams db verify /tmp/ams-ci/system.db
